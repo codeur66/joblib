@@ -119,19 +119,50 @@ def test_shared_array_parallel_on_pickled_shared_array():
     assert_array_equal(b, [2 ** i for i in range(10)])
 
 
+def f(a):
+    from time import sleep
+    print "Sleeping..."
+    sleep(1)
+    print "Waking up to write the array..."
+    print a
+    a.fill(0)
+    print a
+
+
+@with_numpy
+def test_shared_array_garbage_collection():
+    # Fork a pool of processes in advance
+    from multiprocessing import Pool
+    p = Pool(4)
+
+    a = SharedArray(10, dtype=np.int32)
+    a.fill(2)
+    assert_array_equal(a, np.ones(10) * 2)
+
+    # Make a clone of a but don't garbage collect the original
+    b = loads(dumps(a))
+
     # Garbage collect a and continue using b
     # XXX: should we try to handle this case? check multiprocessing.Array
     # behavior and try to replicate it or document limitations in docstring
+    print "Launching subprocess..."
+    results = p.map_async(f, [a] * 8)
+    print "Collecting a..."
+    del a
+    gc.collect()
+    print "Collected."
+    print results.get()
+
+
+    #b.fill(2)
+    #assert_array_equal(b, np.ones(10) * 2)
+
+    #from multiprocessing import Array
+    #a = Array('d', 10)
+    #b = loads(dumps(a))
     #del a
     #gc.collect()
-
-    ## Use b in a parallel setting instead of the initially allocated shared
-    ## array
-    #b.fill(2)
-    #Parallel(n_jobs=2)(delayed(inplace_power)(b, i)
-    #                   for i in range(b.shape[0]))
-
-    #assert_array_equal(b, [2 ** i for i in range(10)])
+    #b[0] = 1
 
 
 @with_numpy
@@ -274,7 +305,7 @@ def test_as_shared_array():
 def test_shared_array_operators():
     """Check that operators trigger regular array allocations"""
     a = as_shared_array(np.ones((2, 5)))
-    b = a * 2
+    b = np.asarray([2]) * a
     assert_array_equal(b, np.ones((2, 5)) * 2)
     # XXX: fix me!
     #assert_false(isinstance(b, SharedArray))

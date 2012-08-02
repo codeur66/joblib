@@ -1,10 +1,15 @@
+from collections import defaultdict
+from uuid import uuid1
+import signal
 import sys
 import numpy as np
 import mmap
 import ctypes
-import os.path
+import os
 
 from _multiprocessing import address_of_buffer
+from multiprocessing import Queue
+from threading import Thread
 
 
 valid_filemodes = ["c", "r+"]
@@ -12,6 +17,79 @@ mode_equivalents = {
     "copyonwrite": "c",
     "readwrite": "r+",
 }
+
+# Global datastructure to host python ref to shared buffer allocated by the
+# current process so as to avoid collecting a shared memory arrays while
+# references are still pointing to it pickled multiprocessing queues
+class SharedBufferAllocator(object):
+
+    def __init__(self):
+        # By default this does nothing if unused. The check_init method should
+        # be called for a process dependent init that is robust to os.fork.
+        self.original_pid = None
+        self.shared_buffers = None
+        self.pickled_references = None
+        self.released_references = None
+        self._collector = None
+
+    def check_init(self):
+        pid = os.getpid()
+
+        if self.original_pid != pid:
+
+            if self.released_references is not None:
+                # Tell the previous thread garbage collecting thread to stop
+                # (this can happen after an os.fork)
+                self.released_references.append(None)
+
+            # the allocator has never been enabled for this process yet
+            self.original_pid = pid
+            self.shared_buffers = dict()
+            self.pickled_references = defaultdict(list)
+            self.released_references = Queue()
+
+            def collect():
+                while True:
+                    item = self.released_references.get()
+                    if item is None:
+                        # Stop thread marker
+                        break
+                    address, reference = item
+                    references = self.pickled_references[address]
+                    references.remove(reference)
+                    if not references:
+                        # release the buffer and let the python garbage
+                        # collector do it's job
+                        try:
+                            del self.shared_buffers[address]
+                        except KeyError:
+                            pass
+                    # TODO: shall we kill the thread and reset the allocator
+                    # if there is not buffer to track any more
+
+            self._collector = t = Thread(target=collect)
+            t.start()
+
+    def register_shared_buffer(self, buffer):
+        self.check_init()
+        address, _ = address_of_buffer(buffer)
+        reference = uuid1().hex
+        self.shared_buffers[address] = buffer
+        self.pickled_references[address].append(reference)
+        return address, reference
+
+
+# Singleton allocator to manage pickled references for anonymous shared
+# arrays allocated during the lifespan of the current process
+allocator = SharedBufferAllocator()
+
+
+def restore_shared_array(address, reference, allocator_queue,
+                         subtype, shape, dtype=np.uint8, mode='r+', order='C'):
+    """Unpickle a shared arrays from a multiprocessing queue"""
+    allocator_queue.append((address, reference))
+    return SharedArray(subtype, shared, dtype, mode, order, address)
+
 
 
 class SharedArray(np.ndarray):
@@ -77,32 +155,36 @@ class SharedArray(np.ndarray):
 
         if address is None:
             buffer = mmap.mmap(-1, bytes, access=acc)
-            address = address_of_buffer(buffer)[0]
         else:
             # Reuse an existing memory address from an anonymous mmap
             buffer = (ctypes.c_byte * bytes).from_address(address)
 
         self = np.ndarray.__new__(subtype, shape, dtype=dtype, buffer=buffer,
                                   order=order)
-        self._address = address
         self.mode = mode
+        self._buffer = buffer
         return self
 
     def __array_finalize__(self, obj):
         # XXX: should we really do this? Check the numpy subclassing reference
         # to guess what is the best behavior to follow here
         if hasattr(obj, '_address') and np.may_share_memory(self, obj):
-            self._address = obj._address
+            self._buffer = obj._buffer
             self.mode = obj.mode
         else:
-            self._address = None
+            self._buffer = None
             self.mode = None
 
     def __reduce__(self):
         """Support for pickling while still sharing the original buffer"""
         order = 'F' if self.flags['F_CONTIGUOUS'] else 'C'
-        return SharedArray, (self.shape, self.dtype, self.mode, order,
-                             self._address)
+        # Register the pickling event in a shared datastructure to prevent
+        # garbage or the original buffer before the subprocess unpickles the
+        # reference to the memory area
+        address, reference = allocator.register_shared_buffer(self._buffer)
+        return restore_shared_array, (
+            address, reference, allocator.released_references,
+            self.shape, self.dtype, self.mode, order)
 
 
 def as_shared_array(a, dtype=None, shape=None, order=None):
