@@ -536,7 +536,7 @@ class Parallel(Logger):
         finally:
             if n_jobs > 1:
                 self._pool.close()
-                self._pool.join()
+                self._pool.terminate()  # terminate does a join()
             self._jobs = list()
         output = self._output
         self._output = None
