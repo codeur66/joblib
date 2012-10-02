@@ -3,10 +3,10 @@ import shutil
 import tempfile
 try:
     import multiprocessing
+    from ..numpy_mmap import has_shared_memory
     from ..pool import MemmapingPool
-    from ..pool import has_shared_memory
     from ..pool import ArrayMemmapReducer
-    from ..pool import reduce_memmap
+    from ..pool import reduce_mmap
 except ImportError:
     multiprocessing = None
 
@@ -24,12 +24,12 @@ from .common import teardown_autokill
 TEMP_FOLDER = None
 
 
-def setup_module():
-    setup_autokill(__name__, timeout=5)
-
-
-def teardown_module():
-    teardown_autokill(__name__)
+#def setup_module():
+#    setup_autokill(__name__, timeout=5)
+#
+#
+#def teardown_module():
+#    teardown_autokill(__name__)
 
 
 def check_multiprocessing():
@@ -105,7 +105,7 @@ def test_memmap_based_array_reducing():
         return cons(*args)
 
     def reconstruct_memmap(x):
-        cons, args = reduce_memmap(x)
+        cons, args = reduce_mmap(x)
         return cons(*args)
 
     # Reconstruct original memmap
@@ -159,7 +159,7 @@ def test_pool_with_memmap():
     # Fork the subprocess before allocating the objects to be passed
     pool_temp_folder = os.path.join(TEMP_FOLDER, 'pool')
     os.makedirs(pool_temp_folder)
-    p = MemmapingPool(10, max_nbytes=2, temp_folder=pool_temp_folder)
+    p = MemmapingPool(2, max_nbytes=2, temp_folder=pool_temp_folder)
 
     filename = os.path.join(TEMP_FOLDER, 'test.mmap')
     a = np.memmap(filename, dtype=np.float32, shape=(3, 5), mode='w+')
