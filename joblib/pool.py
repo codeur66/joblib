@@ -71,7 +71,7 @@ def reconstruct_mmap(filename, dtype, mode, offset, order, shape, strides):
 
 def _reduce_mmap_backed(array, buffer, filename, offset, mode):
     """Pickling reduction for memmap backed arrays"""
-    # offset that comes from the striding differences between a and m
+    # offset that comes from the striding differences between array and buffer
     array_start = np.byte_bounds(array)[0]
     buffer_array = np.frombuffer(buffer, dtype=array.dtype, offset=offset)
     buffer_start = np.byte_bounds(buffer_array)[0]
@@ -137,7 +137,7 @@ class ArrayMemmapReducer(object):
         self.verbose = int(verbose)
 
     def __call__(self, a):
-        m = _get_backing_mmap_info(a)
+        info = _get_backing_mmap_info(a)
         if info is not None:
             # a is already backed by a mmap'ed file, let's reuse it directly
             return _reduce_mmap_backed(a, *info)

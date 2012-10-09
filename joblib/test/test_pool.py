@@ -4,6 +4,7 @@ import tempfile
 try:
     import multiprocessing
     from ..numpy_mmap import has_shared_memory
+    from ..numpy_mmap import mmap_array
     from ..pool import MemmapingPool
     from ..pool import ArrayMemmapReducer
     from ..pool import reduce_mmap
@@ -24,12 +25,12 @@ from .common import teardown_autokill
 TEMP_FOLDER = None
 
 
-#def setup_module():
-#    setup_autokill(__name__, timeout=5)
-#
-#
-#def teardown_module():
-#    teardown_autokill(__name__)
+def setup_module():
+    setup_autokill(__name__, timeout=5)
+
+
+def teardown_module():
+    teardown_autokill(__name__)
 
 
 def check_multiprocessing():
@@ -52,6 +53,15 @@ def teardown_temp_folder():
 
 
 with_temp_folder = with_setup(setup_temp_folder, teardown_temp_folder)
+
+
+def is_higher_or_equal(version_string, version_tuple):
+    """Utility to check numpy version number"""
+    components = version_string.split('.')
+    for minimum, component in zip(version_tuple, components):
+        if minimum > int(component):
+            return False
+    return True
 
 
 def double(input):
@@ -110,8 +120,10 @@ def test_memmap_based_array_reducing():
 
     # Reconstruct original memmap
     a_reconstructed = reconstruct_memmap(a)
+    # memmap instances are reconstructed as numpy arrays with a mmap backed
+    # data buffer
+    assert_false(isinstance(a_reconstructed, np.memmap))
     assert_true(has_shared_memory(a_reconstructed))
-    assert_true(isinstance(a_reconstructed, np.memmap))
     assert_array_equal(a_reconstructed, a)
 
     # Reconstruct strided memmap view
@@ -122,12 +134,21 @@ def test_memmap_based_array_reducing():
     # Reconstruct arrays views on memmap base
     c_reconstructed = reconstruct_array(c)
     assert_false(isinstance(c_reconstructed, np.memmap))
-    assert_true(has_shared_memory(c_reconstructed))
+    if is_higher_or_equal(np.__version__, (1, 7)):
+        # sliced memmap views can not longer be reconstructed with a shared
+        # memory buffer pointing to the original data as this information is
+        # lost by numpy because of the collapsing of the `.base` attribute
+        assert_false(has_shared_memory(c_reconstructed))
+    else:
+        assert_true(has_shared_memory(c_reconstructed))
     assert_array_equal(c_reconstructed, c)
 
     d_reconstructed = reconstruct_array(d)
     assert_false(isinstance(d_reconstructed, np.memmap))
-    assert_true(has_shared_memory(d_reconstructed))
+    if is_higher_or_equal(np.__version__, (1, 7)):
+        assert_false(has_shared_memory(d_reconstructed))
+    else:
+        assert_true(has_shared_memory(d_reconstructed))
     assert_array_equal(d_reconstructed, d)
 
     # Test graceful degradation on fake memmap instances with in-memory
@@ -190,10 +211,13 @@ def test_pool_with_memmap():
     c = np.memmap(filename, dtype=np.float32, shape=(10,), mode='r',
                   offset=5 * 4)
 
+    # The assertion is checked before trying to write
     assert_raises(AssertionError, p.map, double,
                   [(c, i, 3.0) for i in range(c.shape[0])])
 
-    assert_raises(RuntimeError, p.map, double,
+    # The write operation can yield either a RuntimeError or a ValueError
+    # depending on the numpy version
+    assert_raises((RuntimeError, ValueError), p.map, double,
                   [(c, i, 2.0) for i in range(c.shape[0])])
     p.terminate()
 
@@ -201,7 +225,7 @@ def test_pool_with_memmap():
 @with_numpy
 @with_multiprocessing
 @with_temp_folder
-def test_pool_with_memmap_array_view():
+def test_pool_with_mmap_array():
     """Check that subprocess can access and update shared memory array"""
     assert_array_equal = np.testing.assert_array_equal
 
@@ -211,12 +235,12 @@ def test_pool_with_memmap_array_view():
     p = MemmapingPool(10, max_nbytes=2, temp_folder=pool_temp_folder)
 
     filename = os.path.join(TEMP_FOLDER, 'test.mmap')
-    a = np.memmap(filename, dtype=np.float32, shape=(3, 5), mode='w+')
+    a = mmap_array(filename, dtype=np.float32, shape=(3, 5), mode='w+')
     a.fill(1.0)
+    assert_true(has_shared_memory(a))
 
-    # Create an ndarray view on the memmap instance
-    a_view = np.asarray(a)
-    assert_false(isinstance(a_view, np.memmap))
+    # Create a view on the original instance
+    a_view = a.T[:].T
     assert_true(has_shared_memory(a_view))
 
     p.map(double, [(a_view, (i, j), 1.0)
