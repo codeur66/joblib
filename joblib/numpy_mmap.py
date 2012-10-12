@@ -19,10 +19,25 @@ mode_equivalents = {
 }
 
 
-def _get_backing_mmap_info(a):
+class MmapInfo(object):
+    """Memmory mapping information for a data buffer of a shareable array"""
+    # This class could be a namedtuple once Python 2.5 compat is dropped.
+
+    def __init__(self, buffer, filename, offset, mode):
+        self.buffer = buffer
+        self.filename = filename
+        self.offset = offset
+        self.mode = mode
+
+    def __repr__(self):
+        return "MmapInfo(%r, %r, %r, %r)" % (
+            buffer, filename, offset, mode)
+
+
+def get_mmap_info(a):
     """Recursively look up the backing mmap info base if any.
 
-    Returns the tuple (buffer, filename, offset, mode) or None.
+    Return an MmapInfo(buffer, filename, offset, mode) instance or None.
     """
     b = getattr(a, 'base', None)
     if b is None:
@@ -31,12 +46,12 @@ def _get_backing_mmap_info(a):
     elif isinstance(b, mmap.mmap):
         if np is not None and isinstance(a, np.memmap):
             # a is already a real memmap instance carrying metadata itself.
-            return b, a.filename, a.offset, a.mode
+            return MmapInfo(b, a.filename, a.offset, a.mode)
         elif (hasattr(b, 'filename')
               and hasattr(b, 'offset')
               and hasattr(b, 'mode')):
             # Joblib provided a subclass of mmap that preserves metadata
-            return b, b.filename, b.offset, b.mode
+            return MmapInfo(b, b.filename, b.offset, b.mode)
         else:
             # In numpy 1.7, the base collapsing mechanism makes
             # some array views on memmap instances loose the original
@@ -46,12 +61,12 @@ def _get_backing_mmap_info(a):
             return None
     else:
         # Recursive exploration of the base ancestry for numpy < 1.7
-        return _get_backing_mmap_info(b)
+        return get_mmap_info(b)
 
 
 def has_shared_memory(a):
     """Return True if a is backed by some mmap buffer directly or not"""
-    return _get_backing_mmap_info(a) is not None
+    return get_mmap_info(a) is not None
 
 
 class FileBackedMmapBuffer(mmap.mmap):

@@ -76,7 +76,6 @@ def double(input):
         assert_array_equal(data[position], 2 * expected)
 
 
-
 @with_numpy
 @with_multiprocessing
 @with_temp_folder

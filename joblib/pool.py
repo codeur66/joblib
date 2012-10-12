@@ -52,7 +52,7 @@ except ImportError:
 from .numpy_pickle import load
 from .numpy_pickle import dump
 from .numpy_mmap import mmap_array
-from .numpy_mmap import _get_backing_mmap_info
+from .numpy_mmap import get_mmap_info
 from .hashing import hash
 
 
@@ -69,21 +69,22 @@ def reconstruct_mmap(filename, dtype, mode, offset, order, shape, strides):
                       offset=offset, strides=strides, order=order)
 
 
-def _reduce_mmap_backed(array, buffer, filename, offset, mode):
+def _reduce_mmap_backed(array, mmap_info):
     """Pickling reduction for memmap backed arrays"""
     # offset that comes from the striding differences between array and buffer
     array_start = np.byte_bounds(array)[0]
-    buffer_array = np.frombuffer(buffer, dtype=array.dtype, offset=offset)
+    buffer_array = np.frombuffer(
+        mmap_info.buffer, dtype=array.dtype, offset=mmap_info.offset)
     buffer_start = np.byte_bounds(buffer_array)[0]
     buffer_offset = array_start - buffer_start
 
     # offset from the backing memmap
-    buffer_offset += offset
+    buffer_offset += mmap_info.offset
 
     return (
         reconstruct_mmap,
-        (filename, array.dtype, mode, buffer_offset, None, array.shape,
-         array.strides)
+        (mmap_info.filename, array.dtype, mmap_info.mode, buffer_offset, None,
+         array.shape, array.strides)
     )
 
 
@@ -97,11 +98,11 @@ def reduce_mmap(a):
     in-memory as a string using the default pickler.
 
     """
-    info = _get_backing_mmap_info(a)
+    info = get_mmap_info(a)
     if info is not None:
         # m is a real mmap backed memmap instance, reduce a preserving striding
         # information
-        return _reduce_mmap_backed(a, *info)
+        return _reduce_mmap_backed(a, info)
     else:
         # This memmap instance is actually backed by a regular in-memory
         # buffer: this can happen when using binary operators on numpy.memmap
@@ -137,10 +138,10 @@ class ArrayMemmapReducer(object):
         self.verbose = int(verbose)
 
     def __call__(self, a):
-        info = _get_backing_mmap_info(a)
+        info = get_mmap_info(a)
         if info is not None:
             # a is already backed by a mmap'ed file, let's reuse it directly
-            return _reduce_mmap_backed(a, *info)
+            return _reduce_mmap_backed(a, info)
 
         if self._max_nbytes is not None and a.nbytes > self._max_nbytes:
             # check that the folder exists (lazily create the pool temp folder
