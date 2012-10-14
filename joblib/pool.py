@@ -53,6 +53,7 @@ from .numpy_pickle import load
 from .numpy_pickle import dump
 from .numpy_mmap import mmap_array
 from .numpy_mmap import get_mmap_info
+from .numpy_mmap import _find_offset
 from .hashing import hash
 
 
@@ -71,19 +72,10 @@ def reconstruct_mmap(filename, dtype, mode, offset, order, shape, strides):
 
 def _reduce_mmap_backed(array, mmap_info):
     """Pickling reduction for memmap backed arrays"""
-    # offset that comes from the striding differences between array and buffer
-    array_start = np.byte_bounds(array)[0]
-    buffer_array = np.frombuffer(
-        mmap_info.buffer, dtype=array.dtype, offset=mmap_info.offset)
-    buffer_start = np.byte_bounds(buffer_array)[0]
-    buffer_offset = array_start - buffer_start
-
-    # offset from the backing memmap
-    buffer_offset += mmap_info.offset
-
+    offset = _find_offset(array, mmap_info)
     return (
         reconstruct_mmap,
-        (mmap_info.filename, array.dtype, mmap_info.mode, buffer_offset, None,
+        (mmap_info.filename, array.dtype, mmap_info.mode, offset, None,
          array.shape, array.strides)
     )
 
