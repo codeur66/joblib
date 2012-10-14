@@ -79,8 +79,20 @@ def _find_offset(array, mmap_info=None):
     return buffer_offset + mmap_info.offset
 
 
-def has_shared_memory(a):
-    """Return True if a is backed by some mmap buffer directly or not"""
+def has_shareable_memory(a):
+    """Return True if a is backed by a mmap buffer with map metadata.
+
+    This functions check whether a's data is allocated in a memory mapped
+    buffer and that the filename and other information are available for being
+    able to reconstruct it as shared memory arrays in joblib.Parallel worker
+    processes.
+
+    Note: sliced views on numpy.memmap instances are not shareable
+    despite being backed by a mmap buffer as the filename and offset
+    information are lost during slicing. To prevent this, use
+    joblib.numpy_mmap.mmap_array instead of numpy.memmap.
+
+    """
     return get_mmap_info(a) is not None
 
 
