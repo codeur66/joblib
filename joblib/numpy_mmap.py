@@ -140,9 +140,11 @@ def mmap_array(filename=None, dtype=None, mode='r+', offset=0,
 
     This is an alternative to numpy.memmap for handling shared memory while
     making it robust to identify whether or not derived arrays such as sliced
-    views are backed by mmap buffer that carries it's own filename and offset
-    metadata to make it possible to override pickling efficiently (without
-    memory copy) in a multiprocessing context.
+    views are backed by a mmap buffer that carries its own filename and offset
+    metadata.
+
+    Among other things it makes it possible to override pickling efficiently
+    (without memory copy) in a multiprocessing context.
 
     """
     if np is None:
@@ -189,7 +191,7 @@ def mmap_array(filename=None, dtype=None, mode='r+', offset=0,
         if (n_bytes % dtype.itermsize):
             if own_file:
                 file_.close()
-            if is_temp:
+            if is_temporary:
                 os.unlink(filename)
             raise ValueError("Size of available data is not a "
                              "multiple of the data-type size.")
@@ -202,13 +204,12 @@ def mmap_array(filename=None, dtype=None, mode='r+', offset=0,
         for k in shape:
             size *= k
 
-    n_bytes = long(offset + size * dtype.itemsize)
+    n_bytes = int(offset + size * dtype.itemsize)
 
     if mode == 'w+' or (mode == 'r+' and file_length < n_bytes):
         file_.seek(n_bytes - 1, 0)
         file_.write(np.compat.asbytes('\0'))
         file_.flush()
-
 
     if sys.version_info[:2] >= (2, 6):
         # The offset keyword in mmap.mmap needs Python >= 2.6
@@ -251,11 +252,11 @@ def as_mmap_array(a, mmap_mode=None, temp_folder=None):
         and does not match the original mode, a new FileBackedMmapBuffer
         is opened on the backing file.
     mmap_mode: 'r', 'c', 'r+', 'w+' or None
-        Specify a specific memory mapping mode. See mmap_array docstring for
-        details.
+        Specify a memory mapping mode. See mmap_array docstring for details.
     temp_folder: string or None
-        Path to an existing folder used for creating the tempory file. If None,
-        the tempory folder from the Python tempfile module is used.
+        Path to an existing folder used for creating the temporary file.
+        If None, the temporary folder from the Python tempfile module is
+        used.
     """
     a = np.asarray(a)
     mmap_info = get_mmap_info(a)
