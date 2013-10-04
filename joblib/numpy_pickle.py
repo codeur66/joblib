@@ -50,7 +50,7 @@ def _read_magic(file_handle):
     return magic
 
 
-def read_zfile(file_handle):
+def read_zfile(file_handle, buffer_size=1024 ** 2):
     """Read the z-file and return the content as a string
 
     Z-files are raw data compressed with zlib used internally by joblib
@@ -65,10 +65,29 @@ def read_zfile(file_handle):
     length = int(length, 16)
     # We use the known length of the data to tell Zlib the size of the
     # buffer to allocate.
-    data = zlib.decompress(file_handle.read(), 15, length)
-    assert len(data) == length, (
+    data = bytearray(length)
+    decompressor = zlib.decompressobj(15)
+    offset = 0
+    has_more_data = True
+    while has_more_data:
+        compressed_buffer = file_handle.read(buffer_size)
+        has_more_data = len(compressed_buffer) != 0
+        if has_more_data:
+            decompressed_buffer = decompressor.decompress(compressed_buffer)
+        else:
+            decompressed_buffer = decompressor.flush()
+
+        shift = len(decompressed_buffer)
+        data[offset:offset + shift] = decompressed_buffer
+        offset += shift
+
+    assert offset == length, (
         "Incorrect data length while decompressing %s."
         "The file could be corrupted." % file_handle)
+
+    # XXX: this does not work as numpy explicitly checks for the bytes type
+    # using the CPython API: to make this work one should modifiy the
+    # array.__setstate__ method to accept bytearray as well
     return data
 
 
