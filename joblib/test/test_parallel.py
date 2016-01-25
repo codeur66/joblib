@@ -40,15 +40,18 @@ except ImportError:
     from Queue import Queue
 
 
-from joblib.parallel import Parallel, delayed, SafeFunction, WorkerInterrupt
-from joblib.parallel import mp, cpu_count, VALID_BACKENDS
+from joblib._parallel_backends import (SequentialBackend, SafeFunction,
+                                       WorkerInterrupt)
+from joblib.parallel import (Parallel, delayed, register_parallel_backend)
+
+from joblib.parallel import mp, cpu_count, VALID_BACKENDS, effective_n_jobs
 from joblib.my_exceptions import JoblibException
 
 import nose
 from nose.tools import assert_equal, assert_true, assert_false, assert_raises
 
 
-ALL_VALID_BACKENDS = [None] + VALID_BACKENDS
+ALL_VALID_BACKENDS = [None] + sorted(VALID_BACKENDS.keys())
 
 if hasattr(mp, 'get_context'):
     # Custom multiprocessing context in Python 3.4+
@@ -92,6 +95,10 @@ def f(x, y=0, z=0):
 ###############################################################################
 def test_cpu_count():
     assert cpu_count() > 0
+
+
+def test_effective_n_jobs():
+    assert effective_n_jobs() > 0
 
 
 ###############################################################################
@@ -375,39 +382,36 @@ def check_dispatch_multiprocessing(backend):
 
 def test_dispatch_multiprocessing():
     for backend in VALID_BACKENDS:
-        yield check_dispatch_multiprocessing, backend
+        if backend != "sequential":
+            yield check_dispatch_multiprocessing, backend
 
 
 def test_batching_auto_threading():
     # batching='auto' with the threading backend leaves the effective batch
     # size to 1 (no batching) as it has been found to never be beneficial with
     # this low-overhead backend.
-    p = Parallel(n_jobs=2, batch_size='auto', backend='threading')
-    p(delayed(id)(i) for i in range(5000))  # many very fast tasks
-    assert_equal(p._effective_batch_size, 1)
+
+    with Parallel(n_jobs=2, batch_size='auto', backend='threading') as p:
+        p(delayed(id)(i) for i in range(5000))  # many very fast tasks
+        assert_equal(p._pool.compute_batch_size(), 1)
 
 
 def test_batching_auto_multiprocessing():
-    p = Parallel(n_jobs=2, batch_size='auto', backend='multiprocessing')
-    p(delayed(id)(i) for i in range(5000))  # many very fast tasks
+    with Parallel(n_jobs=2, batch_size='auto', backend='multiprocessing') as p:
+        p(delayed(id)(i) for i in range(5000))  # many very fast tasks
 
-    # When the auto-tuning of the batch size is enabled
-    # size kicks in the following attribute gets updated.
-    assert_true(hasattr(p, '_effective_batch_size'))
-
-    # It should be strictly larger than 1 but as we don't want heisen failures
-    # on clogged CI worker environment be safe and only check that it's a
-    # strictly positive number.
-    assert_true(p._effective_batch_size > 0)
+        # It should be strictly larger than 1 but as we don't want heisen
+        # failures on clogged CI worker environment be safe and only check that
+        # it's a strictly positive number.
+        assert_true(p._pool.compute_batch_size() > 0)
 
 
 def test_exception_dispatch():
     "Make sure that exception raised during dispatch are indeed captured"
     assert_raises(
-            ValueError,
-            Parallel(n_jobs=2, pre_dispatch=16, verbose=0),
-                    (delayed(exception_raiser)(i) for i in range(30)),
-            )
+        ValueError,
+        Parallel(n_jobs=2, pre_dispatch=16, verbose=0),
+        (delayed(exception_raiser)(i) for i in range(30)))
 
 
 def test_nested_exception_dispatch():
@@ -438,6 +442,35 @@ def test_multiple_spawning():
         raise nose.SkipTest()
     assert_raises(ImportError, Parallel(n_jobs=2, pre_dispatch='all'),
                   [delayed(_reload_joblib)() for i in range(10)])
+
+
+class MyParallelBackend(SequentialBackend):
+    pass
+
+
+def test_invalid_backend():
+    assert_raises(ValueError, Parallel, backend='unit-testing')
+
+
+def test_register_parallel_backend():
+    register_parallel_backend("unit-testing", MyParallelBackend)
+    assert_true("unit-testing" in VALID_BACKENDS)
+    assert_equal(VALID_BACKENDS["unit-testing"], MyParallelBackend)
+
+
+def test_overwrite_default_backend():
+    register_parallel_backend("default", VALID_BACKENDS["multiprocessing"])
+    assert_equal(VALID_BACKENDS["default"], VALID_BACKENDS["multiprocessing"])
+
+
+def test_overwrite_registered_backend():
+    assert_raises(ValueError, register_parallel_backend,
+                  'multiprocessing', MyParallelBackend)
+
+
+def test_register_nosubclass_backend():
+    assert_raises(ValueError, register_parallel_backend,
+                  'unit-testing', object)
 
 
 ###############################################################################
