@@ -108,7 +108,8 @@ def check_simple_parallel(backend):
     for n_jobs in (1, 2, -1, -2):
         assert_equal(
             [square(x) for x in X],
-            Parallel(n_jobs=n_jobs)(delayed(square)(x) for x in X))
+            Parallel(n_jobs=n_jobs, backend=backend)(
+                delayed(square)(x) for x in X))
     try:
         # To smoke-test verbosity, we capture stdout
         orig_stdout = sys.stdout

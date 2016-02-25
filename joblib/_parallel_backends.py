@@ -7,11 +7,12 @@ import os
 import sys
 import warnings
 import threading
-import abc
+from abc import ABCMeta, abstractmethod
 
 from .format_stack import format_exc
 from .my_exceptions import WorkerInterrupt, TransportableException
 from ._multiprocessing_helpers import mp
+from ._compat import with_metaclass
 if mp is not None:
     from .pool import MemmapingPool
     from multiprocessing.pool import ThreadPool
@@ -30,79 +31,54 @@ MIN_IDEAL_BATCH_DURATION = .2
 MAX_IDEAL_BATCH_DURATION = 2
 
 
-###############################################################################
-class ParallelBackendBase(object):
+class ParallelBackendBase(with_metaclass(ABCMeta)):
     """Helper abc which defines all methods a ParallelBackend must implement"""
-    __metaclass__ = abc.ABCMeta
 
     def __init__(self, parallel):
         self.parallel = parallel
 
-    @abc.abstractmethod
+    @abstractmethod
     def effective_n_jobs(self, n_jobs):
-        """ Determine the number of jobs which are going to run in parallel """
-        return
+        """Determine the number of jobs which are going to run in parallel"""
 
-    @abc.abstractmethod
-    def initialize(self, n_jobs, poolargs):
-        """ Build a process or thread pool and return the number of workers """
-        return
-
-    @abc.abstractmethod
-    def compute_batch_size(self):
-        """ Determine the optimal batch size """
-        return
-
-    @abc.abstractmethod
-    def batch_completed(self, batch_size, duration):
-        """ Callback indicate how long it took to run a batch """
-        return
-
-    @abc.abstractmethod
-    def terminate(self):
-        """ Shutdown the process or thread pool """
-        return
-
-    @abc.abstractmethod
+    @abstractmethod
     def apply_async(self, func, callback=None):
-        """ Schedule a func to be run """
-        return
+        """Schedule a func to be run"""
 
-    @abc.abstractmethod
+    def initialize(self, n_jobs, poolargs):
+        """Build a process or thread pool and return the number of workers"""
+        return self.effective_n_jobs(n_jobs)
+
+    def terminate(self):
+        """Shutdown the process or thread pool"""
+
+    def compute_batch_size(self):
+        """Determine the optimal batch size"""
+        return 1
+
+    def batch_completed(self, batch_size, duration):
+        """Callback indicate how long it took to run a batch"""
+
     def get_exceptions(self):
-        return
+        """List of exception types to be captured."""
+        return []
 
 
-###############################################################################
 class SequentialBackend(ParallelBackendBase):
     """A ParallelBackend which will execute all batches sequentially.
-    Does not use/create any threading objects, and hence has virtually no
-    overhead. Used when n_jobs == 1."""
+
+    Does not use/create any threading objects, and hence has minimal
+    overhead. Used when n_jobs == 1.
+    """
 
     def effective_n_jobs(self, n_jobs):
-        """ Determine the number of jobs which are going to run in parallel """
+        """Determine the number of jobs which are going to run in parallel"""
         if n_jobs == 0:
             raise ValueError('n_jobs == 0 in Parallel has no meaning')
         return 1
 
-    def initialize(self, n_jobs, poolargs):
-        """ Build a process or thread pool and return the number of workers """
-        return 1
-
-    def compute_batch_size(self):
-        """ Determine the optimal batch size """
-        return 1
-
-    def batch_completed(self, batch_size, duration):
-        """ Callback indicate how long it took to run a batch """
-        pass
-
-    def terminate(self):
-        """ Shutdown the process or thread pool """
-        pass
-
     def apply_async(self, func, callback=None):
-        """ Schedule a func to be run """
+        """Schedule a func to be run"""
         result = ImmediateResult(func)
 
         if callback:
@@ -110,18 +86,12 @@ class SequentialBackend(ParallelBackendBase):
 
         return result
 
-    def get_exceptions(self):
-        return []
 
-
-###############################################################################
-class PoolBackend(object):
-    """A helper class which defines some common methods for
-    Pool-like Parallel backends"""
-    __metaclass__ = abc.ABCMeta
+class PoolManagerMixin(object):
+    """A helper class for managing pool of workers."""
 
     def effective_n_jobs(self, n_jobs):
-        """ Determine the number of jobs which are going to run in parallel """
+        """Determine the number of jobs which are going to run in parallel"""
         if n_jobs == 0:
             raise ValueError('n_jobs == 0 in Parallel has no meaning')
         elif mp is None or n_jobs is None:
@@ -133,20 +103,20 @@ class PoolBackend(object):
         return n_jobs
 
     def terminate(self):
-        """ Shutdown the process or thread pool """
+        """Shutdown the process or thread pool"""
         if self._pool is not None:
             self._pool.close()
             self._pool.terminate()  # terminate does a join()
             self._pool = None
 
     def apply_async(self, func, callback=None):
-        """ Schedule a func to be run """
+        """Schedule a func to be run"""
         return self._pool.apply_async(SafeFunction(func), callback=callback)
 
 
-###############################################################################
-class ThreadingBackend(PoolBackend, SequentialBackend):
+class ThreadingBackend(PoolManagerMixin, ParallelBackendBase):
     """A ParallelBackend which will use a thread pool to execute batches in.
+
     This is a low-overhead backend but it suffers from the Python Global
     Interpreter Lock if the called function relies a lot on Python objects.
     Mostly useful when the execution bottleneck is a compiled extension that
@@ -160,12 +130,13 @@ class ThreadingBackend(PoolBackend, SequentialBackend):
         return n_jobs
 
 
-###############################################################################
-class MultiprocessingBackend(PoolBackend, SequentialBackend):
-    """A ParallelBackend which will use a multiprocessing.Pool. Will introduce
-    some communication and memory overhead when exchanging input and output
-    data with the with the worker Python processes.
-    However, does not suffer from the Python Global Interpreter Lock"""
+class MultiprocessingBackend(PoolManagerMixin, ParallelBackendBase):
+    """A ParallelBackend which will use a multiprocessing.Pool.
+
+    Will introduce some communication and memory overhead when exchanging
+    input and output data with the with the worker Python processes.
+    However, does not suffer from the Python Global Interpreter Lock.
+    """
 
     def effective_n_jobs(self, n_jobs):
         """ Determine the number of jobs which are going to run in parallel.
@@ -187,7 +158,7 @@ class MultiprocessingBackend(PoolBackend, SequentialBackend):
                 stacklevel=3)
             return 1
 
-        return super(MultiprocessingBackend, self).effective_n_jobs(n_jobs)
+        return PoolManagerMixin.effective_n_jobs(self, n_jobs)
 
     def initialize(self, n_jobs, poolargs):
         """Build a process or thread pool and return the number of workers"""
@@ -211,11 +182,10 @@ class MultiprocessingBackend(PoolBackend, SequentialBackend):
         # Batching counters
         self._effective_batch_size = 1
         self._smoothed_batch_duration = 0.0
-
         return n_jobs
 
     def compute_batch_size(self):
-        """ Determine the optimal batch size """
+        """Determine the optimal batch size"""
         old_batch_size = self._effective_batch_size
         batch_duration = self._smoothed_batch_duration
         if (batch_duration > 0 and
@@ -260,7 +230,7 @@ class MultiprocessingBackend(PoolBackend, SequentialBackend):
         return batch_size
 
     def batch_completed(self, batch_size, duration):
-        """ Callback indicate how long it took to run a batch """
+        """Callback indicate how long it took to run a batch"""
         if batch_size == self._effective_batch_size:
             # Update the smoothed streaming estimate of the duration of a batch
             # from dispatch to completion
@@ -276,7 +246,7 @@ class MultiprocessingBackend(PoolBackend, SequentialBackend):
             self._smoothed_batch_duration = new_duration
 
     def terminate(self):
-        """ Shutdown the process or thread pool """
+        """Shutdown the process or thread pool"""
         super(MultiprocessingBackend, self).terminate()
         if JOBLIB_SPAWNED_PROCESS in os.environ:
             del os.environ[JOBLIB_SPAWNED_PROCESS]
@@ -287,8 +257,6 @@ class MultiprocessingBackend(PoolBackend, SequentialBackend):
         return [KeyboardInterrupt, WorkerInterrupt]
 
 
-###############################################################################
-# Parallel Backend Helpers
 class ImmediateResult(object):
     def __init__(self, batch):
         # Don't delay the application, to avoid keeping the input
@@ -299,12 +267,12 @@ class ImmediateResult(object):
         return self.results
 
 
-###############################################################################
 class SafeFunction(object):
-    """ Wraps a function to make it exception with full traceback in
-        their representation.
-        Useful for parallel computing with multiprocessing, for which
-        exceptions cannot be captured.
+    """Wrapper that handles the serialization of exception tracebacks.
+
+    If an exception is triggered when calling the inner function, a copy of
+    the full traceback is captured to make it possible to serialize
+    it so that it can be rendered in a different Python process.
     """
     def __init__(self, func):
         self.func = func
@@ -319,6 +287,5 @@ class SafeFunction(object):
             raise WorkerInterrupt()
         except:
             e_type, e_value, e_tb = sys.exc_info()
-            text = format_exc(e_type, e_value, e_tb, context=10,
-                              tb_offset=1)
+            text = format_exc(e_type, e_value, e_tb, context=10, tb_offset=1)
             raise TransportableException(text, e_type)
