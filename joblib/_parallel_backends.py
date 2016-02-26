@@ -45,7 +45,7 @@ class ParallelBackendBase(with_metaclass(ABCMeta)):
     def apply_async(self, func, callback=None):
         """Schedule a func to be run"""
 
-    def initialize(self, n_jobs, poolargs):
+    def initialize(self, n_jobs, backend_args):
         """Build a process or thread pool and return the number of workers"""
         return self.effective_n_jobs(n_jobs)
 
@@ -124,7 +124,7 @@ class ThreadingBackend(PoolManagerMixin, ParallelBackendBase):
     "with nogil" block or an expensive call to a library such as NumPy).
     """
 
-    def initialize(self, n_jobs, poolargs):
+    def initialize(self, n_jobs, backend_args):
         """Build a process or thread pool and return the number of workers"""
         self._pool = ThreadPool(n_jobs)
         return n_jobs
@@ -160,7 +160,7 @@ class MultiprocessingBackend(PoolManagerMixin, ParallelBackendBase):
 
         return PoolManagerMixin.effective_n_jobs(self, n_jobs)
 
-    def initialize(self, n_jobs, poolargs):
+    def initialize(self, n_jobs, backend_args):
         """Build a process or thread pool and return the number of workers"""
         already_forked = int(os.environ.get(JOBLIB_SPAWNED_PROCESS, 0))
         if already_forked:
@@ -177,7 +177,7 @@ class MultiprocessingBackend(PoolManagerMixin, ParallelBackendBase):
 
         # Make sure to free as much memory as possible before forking
         gc.collect()
-        self._pool = MemmapingPool(n_jobs, **poolargs)
+        self._pool = MemmapingPool(n_jobs, **backend_args)
 
         # Batching counters
         self._effective_batch_size = 1

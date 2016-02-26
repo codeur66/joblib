@@ -141,7 +141,7 @@ class BatchCompletionCallBack(object):
         self.parallel.n_completed_tasks += self.batch_size
         this_batch_duration = time.time() - self.dispatch_timestamp
 
-        self.parallel._pool.batch_completed(self.batch_size,
+        self.parallel._backend.batch_completed(self.batch_size,
                                             this_batch_duration)
         self.parallel.print_progress()
         if self.parallel._original_iterator is not None:
@@ -385,14 +385,14 @@ class Parallel(Logger):
         if isinstance(max_nbytes, _basestring):
             max_nbytes = 1024 * memstr_to_kbytes(max_nbytes)
 
-        self.poolargs = dict(
+        self._backend_args = dict(
             max_nbytes=max_nbytes,
             mmap_mode=mmap_mode,
             temp_folder=temp_folder,
             verbose=max(0, self.verbose - 50),
         )
         if DEFAULT_MP_CONTEXT is not None:
-            self.poolargs['context'] = DEFAULT_MP_CONTEXT
+            self._backend_args['context'] = DEFAULT_MP_CONTEXT
 
         if backend is None:
             # `backend=None` was supported in 0.8.2 with this effect
@@ -401,7 +401,7 @@ class Parallel(Logger):
             # Make it possible to pass a custom multiprocessing context as
             # backend to change the start method to forkserver or spawn or
             # preload modules on the forkserver helper process.
-            self.poolargs['context'] = backend
+            self._backend_args['context'] = backend
             backend = "multiprocessing"
         if backend not in VALID_BACKENDS:
             raise ValueError("Invalid backend: %s, expected one of %r"
@@ -419,51 +419,51 @@ class Parallel(Logger):
         # Not starting the pool in the __init__ is a design decision, to be
         # able to close it ASAP, and not burden the user with closing it
         # unless they choose to use the context manager API with a with block.
-        self._pool = None
+        self._backend = None
         self._output = None
         self._jobs = list()
-        self._managed_pool = False
-        self._mp_context = self.poolargs.get('context', None)
+        self._managed_backend = False
+        self._mp_context = self._backend_args.get('context', None)
 
         # This lock is used coordinate the main thread of this process with
         # the async callback thread of our the pool.
         self._lock = threading.Lock()
 
     def __enter__(self):
-        self._managed_pool = True
-        self._initialize_pool()
+        self._managed_backend = True
+        self._initialize_backend()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self._terminate_pool()
-        self._managed_pool = False
+        self._terminate_backend()
+        self._managed_backend = False
 
-    def _initialize_pool(self):
+    def _initialize_backend(self):
         """Build a process or thread pool and return the number of workers"""
-        self._pool = self.backend_factory(self)
+        self._backend = self.backend_factory(self)
 
         # The list of exceptions that we will capture
         self.exceptions = [TransportableException]
 
-        n_jobs = self._pool.effective_n_jobs(self.n_jobs)
+        n_jobs = self._backend.effective_n_jobs(self.n_jobs)
         if n_jobs == 1:
             # Sequential mode: do not use a pool instance to avoid any
             # useless dispatching overhead
-            self._pool = VALID_BACKENDS['sequential'](self)
+            self._backend = VALID_BACKENDS['sequential'](self)
 
-        self.exceptions.extend(self._pool.get_exceptions())
+        self.exceptions.extend(self._backend.get_exceptions())
 
-        return self._pool.initialize(n_jobs, self.poolargs)
+        return self._backend.initialize(n_jobs, self._backend_args)
 
     def _effective_n_jobs(self):
-        if self._pool:
-            return self._pool.effective_n_jobs(self.n_jobs)
+        if self._backend:
+            return self._backend.effective_n_jobs(self.n_jobs)
         return 1
 
-    def _terminate_pool(self):
-        if self._pool is not None:
-            self._pool.terminate()
-            self._pool = None
+    def _terminate_backend(self):
+        if self._backend is not None:
+            self._backend.terminate()
+            self._backend = None
 
     def _dispatch(self, batch):
         """Queue the batch for computing, with or without multiprocessing
@@ -481,7 +481,7 @@ class Parallel(Logger):
 
         dispatch_timestamp = time.time()
         cb = BatchCompletionCallBack(dispatch_timestamp, len(batch), self)
-        job = self._pool.apply_async(batch, callback=cb)
+        job = self._backend.apply_async(batch, callback=cb)
         self._jobs.append(job)
 
     def dispatch_next(self):
@@ -507,7 +507,7 @@ class Parallel(Logger):
 
         """
         if self.batch_size == 'auto':
-            batch_size = self._pool.compute_batch_size()
+            batch_size = self._backend.compute_batch_size()
         else:
             # Fixed batch size strategy
             batch_size = self.batch_size
@@ -610,13 +610,13 @@ Sub-process traceback:
                 # Kill remaining running processes without waiting for
                 # the results as we will raise the exception we got back
                 # to the caller instead of returning any result.
-                self._terminate_pool()
-                if self._managed_pool:
+                self._terminate_backend()
+                if self._managed_backend:
                     # In case we had to terminate a managed pool, let
                     # us start a new one to ensure that subsequent calls
                     # to __call__ on the same Parallel instance will get
                     # a working pool as they expect.
-                    self._initialize_pool()
+                    self._initialize_backend()
                 raise exception
 
     def __call__(self, iterable):
@@ -625,8 +625,8 @@ Sub-process traceback:
         # A flag used to abort the dispatching of jobs in case an
         # exception is found
         self._aborting = False
-        if not self._managed_pool:
-            n_jobs = self._initialize_pool()
+        if not self._managed_backend:
+            n_jobs = self._initialize_backend()
         else:
             n_jobs = self._effective_n_jobs()
 
@@ -673,8 +673,8 @@ Sub-process traceback:
                         (len(self._output), len(self._output),
                          short_format_time(elapsed_time)))
         finally:
-            if not self._managed_pool:
-                self._terminate_pool()
+            if not self._managed_backend:
+                self._terminate_backend()
             self._jobs = list()
         output = self._output
         self._output = None

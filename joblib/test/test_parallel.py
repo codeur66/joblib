@@ -187,9 +187,9 @@ def check_parallel_context_manager(backend):
     with Parallel(n_jobs=4, backend=backend) as p:
         # Internally a pool instance has been eagerly created and is managed
         # via the context manager protocol
-        managed_pool = p._pool
+        managed_backend = p._backend
         if mp is not None:
-            assert_true(managed_pool is not None)
+            assert_true(managed_backend is not None)
 
         # We make call with the managed parallel object several times inside
         # the managed block:
@@ -198,15 +198,15 @@ def check_parallel_context_manager(backend):
 
         # Those calls have all used the same pool instance:
         if mp is not None:
-            assert_true(managed_pool is p._pool)
+            assert_true(managed_backend is p._backend)
 
     # As soon as we exit the context manager block, the pool is terminated and
     # no longer referenced from the parallel object:
-    assert_true(p._pool is None)
+    assert_true(p._backend is None)
 
     # It's still possible to use the parallel instance in non-managed mode:
     assert_equal(expected, p(delayed(f)(x, y=1) for x in lst))
-    assert_true(p._pool is None)
+    assert_true(p._backend is None)
 
 
 def test_parallel_context_manager():
@@ -247,7 +247,7 @@ def test_error_capture():
 
         # Try again with the context manager API
         with Parallel(n_jobs=2) as parallel:
-            assert_true(parallel._pool is not None)
+            assert_true(parallel._backend is not None)
 
             assert_raises(JoblibException, parallel,
                           [delayed(division)(x, y)
@@ -255,7 +255,7 @@ def test_error_capture():
 
             # The managed pool should still be available and be in a working
             # state despite the previously raised (and caught) exception
-            assert_true(parallel._pool is not None)
+            assert_true(parallel._backend is not None)
             assert_equal([f(x, y=1) for x in range(10)],
                          parallel(delayed(f)(x, y=1) for x in range(10)))
 
@@ -263,13 +263,13 @@ def test_error_capture():
                           [delayed(interrupt_raiser)(x) for x in (1, 0)])
 
             # The pool should still be available despite the exception
-            assert_true(parallel._pool is not None)
+            assert_true(parallel._backend is not None)
             assert_equal([f(x, y=1) for x in range(10)],
                          parallel(delayed(f)(x, y=1) for x in range(10)))
 
         # Check that the inner pool has been terminated when exiting the
         # context manager
-        assert_true(parallel._pool is None)
+        assert_true(parallel._backend is None)
     else:
         assert_raises(KeyboardInterrupt, Parallel(n_jobs=2),
                       [delayed(interrupt_raiser)(x) for x in (1, 0)])
@@ -394,7 +394,7 @@ def test_batching_auto_threading():
 
     with Parallel(n_jobs=2, batch_size='auto', backend='threading') as p:
         p(delayed(id)(i) for i in range(5000))  # many very fast tasks
-        assert_equal(p._pool.compute_batch_size(), 1)
+        assert_equal(p._backend.compute_batch_size(), 1)
 
 
 def test_batching_auto_multiprocessing():
@@ -404,7 +404,7 @@ def test_batching_auto_multiprocessing():
         # It should be strictly larger than 1 but as we don't want heisen
         # failures on clogged CI worker environment be safe and only check that
         # it's a strictly positive number.
-        assert_true(p._pool.compute_batch_size() > 0)
+        assert_true(p._backend.compute_batch_size() > 0)
 
 
 def test_exception_dispatch():
