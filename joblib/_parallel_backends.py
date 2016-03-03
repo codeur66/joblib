@@ -21,18 +21,26 @@ if mp is not None:
 class ParallelBackendBase(with_metaclass(ABCMeta)):
     """Helper abc which defines all methods a ParallelBackend must implement"""
 
-    def __init__(self, parallel):
+    def __init__(self, n_jobs=1, parallel=None, **backend_args):
         self.parallel = parallel
 
     @abstractmethod
     def effective_n_jobs(self, n_jobs):
-        """Determine the number of jobs which are going to run in parallel"""
+        """Determine the number of jobs that can actually run in parallel
+
+        This is only need to be a guesstimate of the number of workers that can
+        actually perform work concurrently. The primary use case is to make it
+        possible for the caller to know in how many chunks to slice the work.
+        In general working on larger data chunks is more efficient (less
+        scheduling overhead and better use of CPU cache prefetching heuristics)
+        as long as all the workers have enought work to do.
+        """
 
     @abstractmethod
     def apply_async(self, func, callback=None):
         """Schedule a func to be run"""
 
-    def initialize(self, n_jobs, backend_args):
+    def configure(self, n_jobs, parallel=None, **backend_args):
         """Build a process or thread pool and return the number of workers"""
         return self.effective_n_jobs(n_jobs)
 
