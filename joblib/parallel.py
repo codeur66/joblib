@@ -194,19 +194,18 @@ class BatchCompletionCallBack(object):
 
 
 ###############################################################################
-def register_parallel_backend(name, cls, make_default=False):
-    """Register a new Parallel backend.
+def register_parallel_backend(name, factory, make_default=False):
+    """Register a new Parallel backend factory.
 
     The new backend can then be selected by passing its name as the backend
     argument to the Parallel class. Moreover, the default backend can be
     overwritten by setting make_default=True.
 
-    """
-    if not issubclass(cls, ParallelBackendBase):
-        raise TypeError(
-            "%s is not does not derive from ParallelBackendBase" % cls)
+    The factory should return an instance of ParallelBackendBase.
+    TODO: decribe expected factory arguments.
 
-    BACKENDS[name] = cls
+    """
+    BACKENDS[name] = factory
     if make_default:
         global DEFAULT_BACKEND
         DEFAULT_BACKEND = name
@@ -217,7 +216,7 @@ def effective_n_jobs(n_jobs=-1):
     """Determine the number of jobs which are going to run in parallel, using
     the current default parallel backend.
     """
-    return BACKENDS[get_default_backend()](None).effective_n_jobs(n_jobs=-1)
+    return BACKENDS[get_default_backend()]().effective_n_jobs(n_jobs=-1)
 
 
 ###############################################################################
@@ -465,7 +464,6 @@ class Parallel(Logger):
         self._output = None
         self._jobs = list()
         self._managed_backend = False
-        self._mp_context = self._backend_args.get('context', None)
 
         # This lock is used coordinate the main thread of this process with
         # the async callback thread of our the pool.
@@ -482,21 +480,21 @@ class Parallel(Logger):
 
     def _initialize_backend(self):
         """Build a process or thread pool and return the number of workers"""
-        self._backend = self.backend_factory(self)
+        self._backend = self.backend_factory()
+        n_jobs = self._backend.configure(n_jobs=self.n_jobs, parallel=self,
+                                         **self._backend_args)
 
         # The list of exceptions that we will capture
         self.exceptions = [TransportableException]
-
-        n_jobs = self._backend.effective_n_jobs(self.n_jobs)
         if (n_jobs == 1 and
                 self.backend_factory != BACKENDS['sequential']):
             # Sequential mode: avoid unnecessary dispatching overhead
             warnings.warn('Switching to sequential backend', stacklevel=3)
-            self._backend = BACKENDS['sequential'](self)
-
+            self._backend = BACKENDS['sequential']()
+            n_jobs = self._backend.configure(n_jobs=self.n_jobs, parallel=self,
+                                             **self._backend_args)
         self.exceptions.extend(self._backend.get_exceptions())
-
-        return self._backend.initialize(n_jobs, self._backend_args)
+        return n_jobs
 
     def _effective_n_jobs(self):
         if self._backend:
