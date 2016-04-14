@@ -49,14 +49,24 @@ _backend = threading.local()
 
 
 def get_active_backend():
-    """Return the active default backend"""
+    """Return the active default backend
+
+    return ``(backend_instance, n_jobs, externally_managed)`` where
+    ``externally_managed`` is a boolean flag that is True when the backend
+    instance is managed by a call to parallel_backend that should be left in
+    charge of terminating the backend.
+
+    If externally_managed is False, the caller should call the ``terminate``
+    method once no longer in use.
+    """
     active_backend_and_jobs = getattr(_backend, 'backend_and_jobs', None)
     if active_backend_and_jobs is not None:
-        return active_backend_and_jobs
-    # We are outside of the scope of any parallel_backend context manager,
-    # create the default backend instance now
-    active_backend = BACKENDS[DEFAULT_BACKEND]()
-    return active_backend, DEFAULT_N_JOBS
+        return active_backend_and_jobs + (True,)
+    else:
+        # We are outside of the scope of any parallel_backend context manager,
+        # create the default backend instance now
+        active_backend = BACKENDS[DEFAULT_BACKEND]()
+        return active_backend, DEFAULT_N_JOBS, False
 
 
 @contextmanager
@@ -95,6 +105,7 @@ def parallel_backend(backend, n_jobs=-1, **backend_params):
         _backend.backend_and_jobs = (backend, n_jobs)
         yield
     finally:
+        backend.terminate()
         if old_backend_and_jobs is None:
             if getattr(_backend, 'backend_and_jobs', None) is not None:
                 del _backend.backend_and_jobs
@@ -258,7 +269,7 @@ def effective_n_jobs(n_jobs=-1):
     .. versionadded:: 0.10
 
     """
-    backend, _ = get_active_backend()
+    backend, _, _ = get_active_backend()
     return backend.effective_n_jobs(n_jobs=n_jobs)
 
 
@@ -457,7 +468,7 @@ class Parallel(Logger):
     def __init__(self, n_jobs=1, backend=None, verbose=0,
                  pre_dispatch='2 * n_jobs', batch_size='auto',
                  temp_folder=None, max_nbytes='1M', mmap_mode='r'):
-        active_backend, default_n_jobs = get_active_backend()
+        active_backend, default_n_jobs, ext_managed = get_active_backend()
         if backend is None and n_jobs == 1:
             # If we are under a parallel_backend context manager, look up
             # the default number of jobs and use that instead:
@@ -478,8 +489,10 @@ class Parallel(Logger):
         if DEFAULT_MP_CONTEXT is not None:
             self._backend_args['context'] = DEFAULT_MP_CONTEXT
 
+        self._externally_managed_backend = False
         if backend is None:
             backend = active_backend
+            self._externally_managed_backend = ext_managed
         elif hasattr(backend, 'Pool') and hasattr(backend, 'Lock'):
             # Make it possible to pass a custom multiprocessing context as
             # backend to change the start method to forkserver or spawn or
@@ -505,6 +518,8 @@ class Parallel(Logger):
         self._backend = backend
         self._output = None
         self._jobs = list()
+
+        # Marker used
         self._managed_backend = False
 
         # This lock is used coordinate the main thread of this process with
@@ -512,12 +527,14 @@ class Parallel(Logger):
         self._lock = threading.Lock()
 
     def __enter__(self):
-        self._managed_backend = True
-        self._initialize_backend()
+        if not self._externally_managed_backend:
+            self._managed_backend = True
+            self._initialize_backend()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self._terminate_backend()
+        if not self._externally_managed_backend:
+            self._terminate_backend()
         self._managed_backend = False
 
     def _initialize_backend(self):
@@ -540,7 +557,7 @@ class Parallel(Logger):
         return 1
 
     def _terminate_backend(self):
-        if self._backend is not None:
+        if self._backend is not None and not self._externally_managed_backend:
             self._backend.terminate()
 
     def _dispatch(self, batch):

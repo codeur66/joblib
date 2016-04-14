@@ -463,15 +463,30 @@ def test_multiple_spawning():
 class FakeParallelBackend(SequentialBackend):
     """Pretends to run conncurrently while running sequentially."""
 
+    def __init__(self, *args, **kwargs):
+        super(FakeParallelBackend, self).__init__(*args, **kwargs)
+        self._terminated = False
+
+    def effective_n_jobs(self, n_jobs=1):
+        if n_jobs <= 0:
+            n_jobs = max(mp.cpu_count() + 1 + n_jobs, 1)
+        return n_jobs
+
     def configure(self, n_jobs=1, parallel=None, **backend_args):
-        self.n_jobs = self.effective_n_jobs(n_jobs)
+        self.n_jobs = n_jobs = self.effective_n_jobs(n_jobs=n_jobs)
         self.parallel = parallel
         return n_jobs
 
-    def effective_n_jobs(self, n_jobs=1):
-        if n_jobs < 0:
-            n_jobs = max(mp.cpu_count() + 1 + n_jobs, 1)
-        return n_jobs
+    def apply_sync(self, *args, **kwargs):
+        if self._terminated:
+            raise RuntimeError('FakeParallelBackend has been terminated')
+        super(FakeParallelBackend, self).apply_sync(*args, **kwargs)
+
+    def terminate(self):
+        if self._terminated:
+            raise RuntimeError(
+                'FakeParallelBackend has already been terminated')
+        self._terminated = True
 
 
 def test_invalid_backend():
@@ -501,8 +516,9 @@ def test_overwrite_default_backend():
 
 def check_backend_context_manager(backend_name):
     with parallel_backend(backend_name, n_jobs=3):
-        active_backend, active_n_jobs = parallel.get_active_backend()
-        assert_equal(active_n_jobs, 3)
+        active_backend, n_jobs, ext_managed = parallel.get_active_backend()
+        assert ext_managed
+        assert_equal(n_jobs, 3)
         assert_equal(effective_n_jobs(3), 3)
         p = Parallel()
         assert_equal(p.n_jobs, 3)
@@ -519,11 +535,11 @@ def check_backend_context_manager(backend_name):
 
 def test_backend_context_manager():
     all_test_backends = ['test_backend_%d' % i for i in range(3)]
-    for test_backend in all_test_backends:
-        register_parallel_backend(test_backend, FakeParallelBackend)
-    all_backends = ['multiprocessing', 'threading'] + all_test_backends
-
     try:
+        for test_backend in all_test_backends:
+            register_parallel_backend(test_backend, FakeParallelBackend)
+        all_backends = ['multiprocessing', 'threading'] + all_test_backends
+
         assert_equal(_active_backend_type(), MultiprocessingBackend)
         # check that this possible to switch parallel backends sequentially
         for test_backend in all_backends:
@@ -545,6 +561,32 @@ def test_backend_context_manager():
                 del BACKENDS[backend_name]
 
 
+def test_backend_termination():
+    all_test_backends = ['test_backend_%d' % i for i in range(3)]
+    try:
+        for test_backend in all_test_backends:
+            register_parallel_backend(test_backend, FakeParallelBackend)
+
+        # Check that several parallel calls can be done within the same
+        # backend block without calling the backend terminate method
+        with parallel_backend('test_backend_0'):
+            backend_before = parallel.get_active_backend()[0]
+            assert not backend_before._terminated
+            assert_equal([sqrt(i) for i in range(10)],
+                         Parallel()(delayed(sqrt)(i) for i in range(10)))
+            assert_equal([sqrt(i) for i in range(10)],
+                         Parallel()(delayed(sqrt)(i) for i in range(10)))
+            backend_after = parallel.get_active_backend()[0]
+            assert backend_before is backend_after
+            assert not backend_after._terminated
+        # Backend termination is triggered when exiting the managed block
+        assert backend_after._terminated
+    finally:
+        for backend_name in list(BACKENDS.keys()):
+            if backend_name.startswith('test_'):
+                del BACKENDS[backend_name]
+
+
 class ParameterizedParallelBackend(SequentialBackend):
     """Pretends to run conncurrently while running sequentially."""
 
@@ -560,10 +602,11 @@ def test_parameterized_backend_context_manager():
         assert_equal(_active_backend_type(), MultiprocessingBackend)
 
         with parallel_backend('param_backend', param=42, n_jobs=3):
-            active_backend, active_n_jobs = parallel.get_active_backend()
+            active_backend, n_jobs, ext_managed = parallel.get_active_backend()
+            assert ext_managed
             assert_equal(type(active_backend), ParameterizedParallelBackend)
             assert_equal(active_backend.param, 42)
-            assert_equal(active_n_jobs, 3)
+            assert_equal(n_jobs, 3)
             p = Parallel()
             assert_equal(p.n_jobs, 3)
             assert_true(p._backend is active_backend)
@@ -582,10 +625,11 @@ def test_direct_parameterized_backend_context_manager():
     # Check that it's possible to pass a backend instance directly,
     # without registration
     with parallel_backend(ParameterizedParallelBackend(param=43), n_jobs=5):
-        active_backend, active_n_jobs = parallel.get_active_backend()
+        active_backend, n_jobs, ext_managed = parallel.get_active_backend()
+        assert ext_managed
         assert_equal(type(active_backend), ParameterizedParallelBackend)
         assert_equal(active_backend.param, 43)
-        assert_equal(active_n_jobs, 5)
+        assert_equal(n_jobs, 5)
         p = Parallel()
         assert_equal(p.n_jobs, 5)
         assert_true(p._backend is active_backend)

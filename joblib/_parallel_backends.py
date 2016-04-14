@@ -91,6 +91,8 @@ class SequentialBackend(ParallelBackendBase):
 class PoolManagerMixin(object):
     """A helper class for managing pool of workers."""
 
+    _pool = None
+
     def effective_n_jobs(self, n_jobs):
         """Determine the number of jobs which are going to run in parallel"""
         if n_jobs == 0:
