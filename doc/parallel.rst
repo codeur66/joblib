@@ -153,7 +153,9 @@ a reference if you want to implement your own custom backend.
 
 Note that it is possible to register a backend class that has some mandatory
 constructor parameters such as the network address and connection credentials
-for a remote cluster computing service::
+for a remote cluster computing service:
+
+.. code-block:: python
 
     class MyCustomBackend(ParallelBackendBase):
 
@@ -168,7 +170,9 @@ for a remote cluster computing service::
     register_parallel_backend('custom', MyCustomBackend)
 
 The connection parameters can then be passed to the
-:func:`joblib.parallel_backend` context manager::
+:func:`joblib.parallel_backend` context manager:
+
+.. code-block:: python
 
     with parallel_backend('custom', endpoint='http://compute', api_key='42'):
         Parallel()(delayed(some_function)(i) for i in range(10))
