@@ -29,6 +29,7 @@ from ._parallel_backends import (FallbackToBackend, MultiprocessingBackend,
                                  LokyBackend)
 from ._compat import _basestring
 from .externals.cloudpickle import dumps, loads
+from .func_inspect import get_func_name
 
 # Make sure that those two classes are part of the public joblib.parallel API
 # so that 3rd party backend implementers can import them from here.
@@ -416,6 +417,10 @@ class Parallel(Logger):
         mmap_mode: {None, 'r+', 'r', 'w+', 'c'}
             Memmapping mode for numpy arrays passed to workers.
             See 'max_nbytes' parameter documentation for more details.
+        name: str or None, optional
+            Give a name to the Parallel call to be displayed in the verbose
+            output to ease debugging purpose. If no name is given, joblib will
+            try to introspect the delayed function name to .
 
         Notes
         -----
@@ -537,7 +542,7 @@ class Parallel(Logger):
     def __init__(self, n_jobs=None, backend=None, verbose=0, timeout=None,
                  pre_dispatch='2 * n_jobs', batch_size='auto',
                  temp_folder=None, max_nbytes='1M', mmap_mode='r',
-                 prefer=None, require=None):
+                 prefer=None, require=None, name=None):
         active_backend, context_n_jobs = get_active_backend(
             prefer=prefer, require=require, verbose=verbose)
         if backend is None and n_jobs is None:
@@ -603,6 +608,7 @@ class Parallel(Logger):
         self._output = None
         self._jobs = list()
         self._managed_backend = False
+        self._name = name
 
         # This lock is used coordinate the main thread of this process with
         # the async callback thread of our the pool.
@@ -834,8 +840,6 @@ Sub-process traceback:
             n_jobs = self._initialize_backend()
         else:
             n_jobs = self._effective_n_jobs()
-        self._print("Using backend %s with %d concurrent workers.",
-                    (self._backend.__class__.__name__, n_jobs))
 
         iterator = iter(iterable)
         pre_dispatch = self.pre_dispatch
@@ -853,7 +857,14 @@ Sub-process traceback:
             # The main thread will consume the first pre_dispatch items and
             # the remaining items will later be lazily dispatched by async
             # callbacks upon task completions.
-            iterator = itertools.islice(iterator, pre_dispatch)
+            first_elements = list(itertools.islice(iterator, pre_dispatch))
+            if self._name is None and len(first_elements) > 0:
+                func, args, kwargs = first_elements[0]
+                _, self._name = get_func_name(func)
+            iterator = iter(first_elements)
+
+        self._print("Using backend %s with %d concurrent workers.",
+                    (self._backend.__class__.__name__, n_jobs))
 
         self._start_time = time.time()
         self.n_dispatched_batches = 0
@@ -896,4 +907,9 @@ Sub-process traceback:
         return output
 
     def __repr__(self):
-        return '%s(n_jobs=%s)' % (self.__class__.__name__, self.n_jobs)
+        if self._name is None:
+            name_kwarg = ""
+        else:
+            name_kwarg = "name='%s', " % self._name
+        return '%s(%sn_jobs=%s)' % (
+            self.__class__.__name__, name_kwarg, self.n_jobs)
