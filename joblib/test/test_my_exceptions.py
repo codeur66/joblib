@@ -1,7 +1,10 @@
 """
 Test my automatically generate exceptions
 """
-from joblib import my_exceptions
+from joblib.my_exceptions import JoblibException
+from joblib.my_exceptions import JoblibNameError
+from joblib.my_exceptions import TransportableException
+from joblib.my_exceptions import _mk_exception
 
 
 class CustomException(Exception):
@@ -21,25 +24,17 @@ class CustomException2(Exception):
 
 
 def test_inheritance():
-    assert isinstance(my_exceptions.JoblibNameError(), NameError)
-    assert isinstance(my_exceptions.JoblibNameError(),
-                      my_exceptions.JoblibException)
-    assert (my_exceptions.JoblibNameError is
-            my_exceptions._mk_exception(NameError)[0])
+    assert isinstance(JoblibNameError(), NameError)
+    assert isinstance(JoblibNameError(), JoblibException)
+    assert JoblibNameError is _mk_exception(NameError)[0]
 
 
-def test_inheritance_special_cases():
+def test_inheritance_special_case():
     # _mk_exception should transform Exception to JoblibException
-    assert (my_exceptions._mk_exception(Exception)[0] is
-            my_exceptions.JoblibException)
+    assert _mk_exception(Exception)[0] is JoblibException
 
-    # Subclasses of JoblibException should be mapped to
-    # JoblibException by _mk_exception
-    for exception in [my_exceptions.JoblibException,
-                      my_exceptions.TransportableException]:
-        assert (my_exceptions._mk_exception(exception)[0] is
-                my_exceptions.JoblibException)
 
+def test_non_inheritable():
     # Non-inheritable exception classes should be mapped to
     # JoblibException by _mk_exception. That can happen with classes
     # generated with SWIG. See
@@ -47,8 +42,7 @@ def test_inheritance_special_cases():
     # example.
     non_inheritable_classes = [type(lambda: None), bool]
     for exception in non_inheritable_classes:
-        assert (my_exceptions._mk_exception(exception)[0] is
-                my_exceptions.JoblibException)
+        assert _mk_exception(exception)[0] is JoblibException
 
 
 def test__mk_exception():
@@ -56,11 +50,20 @@ def test__mk_exception():
     for klass in (Exception, TypeError, SyntaxError, ValueError,
                   ImportError, CustomException, CustomException2):
         message = 'This message should be in the exception repr'
-        exc = my_exceptions._mk_exception(klass)[0](
+        exc = _mk_exception(klass)[0](
             message, 'some', 'other', 'args', 'that are not', 'in the repr')
         exc_repr = repr(exc)
 
         assert isinstance(exc, klass)
-        assert isinstance(exc, my_exceptions.JoblibException)
+        assert isinstance(exc, JoblibException)
         assert exc.__class__.__name__ in exc_repr
         assert message in exc_repr
+
+
+def test_recursive__mk_exception():
+    jre = _mk_exception(RuntimeError)[0]
+    jjre = _mk_exception(_mk_exception(RuntimeError)[0])[0]
+    assert jre is jjre
+
+    assert _mk_exception(JoblibException)[0] is JoblibException
+    assert _mk_exception(TransportableException)[0] is TransportableException

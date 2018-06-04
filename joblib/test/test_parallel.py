@@ -18,6 +18,7 @@ from multiprocessing import TimeoutError
 import joblib
 from joblib import dump, load
 from joblib import parallel
+from joblib.my_exceptions import JoblibValueError
 
 from joblib.test.common import np, with_numpy
 from joblib.test.common import with_multiprocessing
@@ -43,6 +44,12 @@ except ImportError:
     from Queue import Queue
 
 try:
+    RecursionError
+except NameError:
+    # Backward compat
+    RecursionError = RuntimeError
+
+try:
     import posix
 except ImportError:
     posix = None
@@ -61,7 +68,6 @@ from joblib.parallel import effective_n_jobs, cpu_count
 
 from joblib.parallel import mp, BACKENDS, DEFAULT_BACKEND, EXTERNAL_BACKENDS
 from joblib.my_exceptions import JoblibException
-from joblib.testing import raises
 
 
 ALL_VALID_BACKENDS = [None] + sorted(BACKENDS.keys())
@@ -1228,18 +1234,41 @@ def test_external_backends():
         assert isinstance(Parallel()._backend, ThreadingBackend)
 
 
+def test_nested_exception_type():
+    def raise_error(x):
+        raise ValueError(str(x))
+
+    def nested_func(*args):
+        Parallel(n_jobs=2)(delayed(raise_error)(i) for i in range(5))
+
+    with raises(ValueError) as excinfo:
+        Parallel(n_jobs=2)(delayed(nested_func)(i) for i in range(5))
+
+    # JoblibValueError is not recursively wrapped despite the nested call:
+    assert excinfo.type is JoblibValueError
+
+
 def _recursive_parallel():
     # A horrible function that does recursive parallelist
-    Parallel()(delayed(_recursive_parallel)() for i in range(2))
+    Parallel(n_jobs=2)(delayed(_recursive_parallel)() for i in range(2))
 
 
-def test_fork_bomp():
-    # Test that recursive parallelism raises a recursion rather than
-    # doing a fork bomp
-    # Depending on whether the exception is raised in the main thread
-    # or in a slave thread and the version of Python one exception org
-    # another is raised
-    with parallel_backend('threading', n_jobs=-1):
-        with raises(BaseException):
+def test_thread_bomb_protection_threading_backend():
+    # Test that recursive parallelism raises a recursion error rather than
+    # exhausting system resources (fork bomb or thread exhaustion).
+    #
+    # The recursion protection is built-in the threading backend that
+    # automatically switch to the sequential backend if too many threads
+    # are requested. In turn the regular Python recursion protection kicks in
+    # and is propagated back to the original caller.
+    with parallel_backend('threading', n_jobs=2):
+        with raises(RecursionError):
             _recursive_parallel()
 
+
+def test_thread_bomb_protection_default_backend():
+    # If the default backend (loky) is used, first second level nested call
+    # will use the threading backend, and recursively the same protection
+    # kicks-in.
+    with raises(RecursionError):
+        _recursive_parallel()

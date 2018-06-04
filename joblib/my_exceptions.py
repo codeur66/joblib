@@ -61,6 +61,10 @@ _exception_mapping = dict()
 
 
 def _mk_exception(exception, name=None):
+    if issubclass(exception, JoblibException):
+        # No need to wrap recursively JoblibException
+        return exception, exception.__name__
+
     # Create an exception inheriting from both JoblibException
     # and that exception
     if name is None:
